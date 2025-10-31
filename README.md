@@ -18,7 +18,7 @@ Este repositorio contiene un juego sencillo usando la librería de MediaPipe que
 
 ## Prerequisitos
 
-Tener instalado **Conda**, [instalar aquí](https://www.anaconda.com/docs/getting-started/miniconda/install#macos-linux-installation).
+Tener instalado **Conda**, [instalar aquí](https://www.anaconda.com/docs/getting-started/miniconda/install).
 
 ## Requisitos
 
