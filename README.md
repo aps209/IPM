@@ -42,7 +42,7 @@ Script para poder descargar los pesos del modelo *Pose Landmarker*:
 python download_models.py
 ```
 
-Para descargar los pesos de otros modelos como _Hand Landmarker_, _Face Landmarker_ u _Holisitc Landmarker_ debes de descargarlos de los [enlaces](https://github.com/CarloHSUA/IPM/tree/main?tab=readme-ov-file#resumen) de la página oficial de MediaPipe
+Para descargar los pesos de otros modelos como _Hand Landmarker_, _Face Landmarker_ u _Holisitc Landmarker_ debes de descargarlos de los [enlaces](https://github.com/CarloHSUA/IPM/tree/main?tab=readme-ov-file#introducci%C3%B3n) de la página oficial de MediaPipe
 
 
 
