@@ -4,6 +4,7 @@ import tqdm
 
 url = {
     "hand_landmarker.task": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+    "hand_landmarker_latest.task": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker_latest.task"
 }
 
 for key, value in url.items():

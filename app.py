@@ -3,6 +3,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import time
+import random # <-- 1. Importar random
 
 # --- 1. IMPORTACIONES ---
 BaseOptions = mp.tasks.BaseOptions
@@ -15,64 +16,39 @@ mp_hands = mp.solutions.hands
 
 from mediapipe.framework.formats import landmark_pb2 
 
-# --- 2. FUNCIONES DE DISTANCIA ---
+# --- CONSTANTES DEL JUEGO (Paso 10) ---
+PIECE_SIZE = 100 # Ancho y Alto de cada pieza
+GRID_COLOR = (100, 100, 100) # Color de la cuadrícula
+SPAWN_X_LIMIT = 250 # Límite en X para que aparezcan las piezas
+
+# --- 2. FUNCIONES DE GESTOS Y DISTANCIA ---
 def get_normalized_distance(landmark1, landmark2) -> float:
-    distance = np.sqrt((landmark1.x - landmark2.x)**2 + (landmark1.y - landmark2.y)**2)
-    return distance
+    return np.sqrt((landmark1.x - landmark2.x)**2 + (landmark1.y - landmark2.y)**2)
 
-# Distancia vertical (para ver si los dedos están estirados)
-def get_vertical_distance(landmark1, landmark2) -> float:
-    return abs(landmark1.y - landmark2.y)
-
-# --- 3. NUEVA FUNCIÓN: DETECCIÓN DE GESTOS (Paso 7) ---
-PINCH_THRESHOLD = 0.07 # Umbral para pellizco
-POINT_THRESHOLD = 0.1 # Umbral para puntero (cuán estirado)
-
+PINCH_THRESHOLD = 0.07 
 def detect_gesture(hand_landmarks_list):
-    """
-    Detecta un gesto (PELLIZCO o PUNTERO) en una mano.
-    Devuelve: (Tipo de Gesto, Posición (x, y))
-    """
-    
-    # --- Detección de PELLIZCO ---
     thumb_tip = hand_landmarks_list[mp_hands.HandLandmark.THUMB_TIP]
     index_tip = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_TIP]
-    
     pinch_distance = get_normalized_distance(thumb_tip, index_tip)
-    
     if pinch_distance < PINCH_THRESHOLD:
-        # Posición del pellizco: el centro entre los dos dedos
-        pinch_x = (thumb_tip.x + index_tip.x) / 2
-        pinch_y = (thumb_tip.y + index_tip.y) / 2
-        return "PINCH", (pinch_x, pinch_y)
+        pos = ((thumb_tip.x + index_tip.x) / 2, (thumb_tip.y + index_tip.y) / 2)
+        return "PINCH", pos
 
-    # --- Detección de PUNTERO ---
-    # Landmarks que usamos
-    wrist = hand_landmarks_list[mp_hands.HandLandmark.WRIST]
-    index_mcp = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_MCP] # Base del índice
-    
-    # Puntas de los dedos
+    index_mcp = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_MCP]
+    index_tip = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_TIP] # Re-definimos index_tip
     middle_tip = hand_landmarks_list[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
     ring_tip = hand_landmarks_list[mp_hands.HandLandmark.RING_FINGER_TIP]
     pinky_tip = hand_landmarks_list[mp_hands.HandLandmark.PINKY_TIP]
+    if index_tip.y < index_mcp.y and (middle_tip.y > index_mcp.y and ring_tip.y > index_mcp.y and pinky_tip.y > index_mcp.y):
+        return "POINT", (index_tip.x, index_tip.y)
 
-    # 1. Índice estirado: La punta del índice (8) debe estar MÁS ARRIBA (menor 'y') que su base (5)
-    if index_tip.y < index_mcp.y:
-        # 2. Otros dedos encogidos: Sus puntas (12, 16, 20) deben estar MÁS ABAJO (mayor 'y') que la base del índice (5)
-        if (middle_tip.y > index_mcp.y and 
-            ring_tip.y > index_mcp.y and 
-            pinky_tip.y > index_mcp.y):
-            
-            # Posición del puntero: la punta del dedo índice
-            return "POINT", (index_tip.x, index_tip.y)
+    p0, p5, p17 = hand_landmarks_list[0], hand_landmarks_list[5], hand_landmarks_list[17]
+    pos = ((p0.x + p5.x + p17.x) / 3, (p0.y + p5.y + p17.y) / 3)
+    return "HAND", pos
 
-    return "NONE", (0, 0) # Ningún gesto detectado
-
-
-# --- 4. FUNCIÓN: COMPOSICIÓN ALFA ---
+# --- 3. FUNCIÓN: COMPOSICIÓN ALFA ---
 def overlay_transparent(background, overlay, x, y):
-    x = int(x)
-    y = int(y)
+    x, y = int(x), int(y)
     h_overlay, w_overlay = overlay.shape[:2]
     h_back, w_back = background.shape[:2]
     y1, y2 = max(0, y), min(h_back, y + h_overlay)
@@ -89,19 +65,35 @@ def overlay_transparent(background, overlay, x, y):
     blended_roi = (alpha_mask * overlay_bgr + alpha_mask_inv * roi).astype(np.uint8)
     background[y1:y2, x1:x2] = blended_roi
 
+# --- 4. NUEVA FUNCIÓN: DIBUJAR CUADRÍCULA (Paso 10) ---
+def draw_grid(canvas, grid_origin, grid_size, piece_size):
+    """Dibuja la cuadrícula de la meta en el canvas."""
+    rows, cols = grid_size
+    (ox, oy) = grid_origin
+    for r in range(rows + 1):
+        y = oy + r * piece_size
+        cv2.line(canvas, (ox, y), (ox + cols * piece_size, y), GRID_COLOR, 2)
+    for c in range(cols + 1):
+        x = ox + c * piece_size
+        cv2.line(canvas, (x, oy), (x, oy + rows * piece_size), GRID_COLOR, 2)
 
-# --- 5. CLASE: PIEZA DEL PUZZLE ---
+
+# --- 5. CLASE: PIEZA DEL PUZZLE (Modificada) ---
 class PuzzlePiece:
-    def __init__(self, img_path, target_x, target_y, target_angle=0):
+    # --- Modificado: Acepta ángulo inicial ---
+    def __init__(self, img_path, target_x, target_y, target_angle, initial_angle):
         self.original_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         if self.original_img is None:
             raise FileNotFoundError(f"No se pudo cargar la imagen: {img_path}")
-        self.original_img = cv2.resize(self.original_img, (100, 100), interpolation=cv2.INTER_AREA)
+        
+        # Redimensionar a nuestro tamaño estándar
+        self.original_img = cv2.resize(self.original_img, (PIECE_SIZE, PIECE_SIZE), interpolation=cv2.INTER_AREA)
         self.h, self.w = self.original_img.shape[:2]
         
-        self.x = np.random.randint(50, 200) # Posición central (x)
-        self.y = np.random.randint(50, 200) # Posición central (y)
-        self.angle = 0 
+        # --- Modificado: Posición inicial aleatoria a la izquierda ---
+        self.x = np.random.randint(self.w // 2, SPAWN_X_LIMIT - self.w // 2)
+        self.y = np.random.randint(self.h // 2, 480 - self.h // 2) # Asumiendo 480 de alto
+        self.angle = initial_angle
         
         self.target_x = target_x
         self.target_y = target_y
@@ -114,77 +106,107 @@ class PuzzlePiece:
         self.snap_threshold_angle = 10 
 
     def draw(self, frame):
-        target_color = (0, 255, 0) if self.is_solved else self.target_color
-        cv2.rectangle(frame, (self.target_x, self.target_y), 
-                      (self.target_x + self.w, self.target_y + self.h), 
-                      target_color, 2)
+        # (Ya no dibujamos el 'target_rect' aquí, se dibuja la cuadrícula global)
         
         center = (self.w // 2, self.h // 2)
         M = cv2.getRotationMatrix2D(center, self.angle, 1.0)
-        
         cos, sin = np.abs(M[0, 0]), np.abs(M[0, 1])
         new_w, new_h = int((self.h * sin) + (self.w * cos)), int((self.h * cos) + (self.w * sin))
-
         M[0, 2] += (new_w / 2) - center[0]
         M[1, 2] += (new_h / 2) - center[1]
-
         rotated_img = cv2.warpAffine(self.original_img, M, (new_w, new_h))
-        
-        # Dibuja desde el centro (x, y)
         draw_x = self.x - (new_w // 2)
         draw_y = self.y - (new_h // 2)
-        
         overlay_transparent(frame, rotated_img, draw_x, draw_y)
 
     def update_position(self, pos):
         if self.is_held:
-            self.x, self.y = pos[0], pos[1] # pos es (x_pixel, y_pixel)
+            self.x, self.y = pos[0], pos[1]
 
-    # --- NUEVA FUNCIÓN (Paso 7) ---
     def rotate_piece(self):
-        """Rota la pieza 90 grados en sentido horario."""
-        if not self.is_solved:
+        if not self.is_solved and self.is_held:
             self.angle = (self.angle + 90) % 360
             print(f"¡ROTANDO! Nuevo ángulo: {self.angle}")
 
     def check_collision(self, pos) -> bool:
         (pinch_x, pinch_y) = pos
-        # Comprobar si el punto (pos) está dentro del bounding box (caja) de la pieza
-        # (Simplificado, ya que la pieza rota. Usamos el centro)
         dist = np.sqrt((pinch_x - self.x)**2 + (pinch_y - self.y)**2)
-        return dist < self.w / 2 # Si toca cerca del centro
+        return dist < self.w / 2 
 
     def snap_to_target(self):
-        dist_pos = np.sqrt((self.x - (self.target_x + self.w // 2))**2 + 
-                           (self.y - (self.target_y + self.h // 2))**2)
+        # Comprobar contra el *centro* de la meta
+        target_center_x = self.target_x + self.w // 2
+        target_center_y = self.target_y + self.h // 2
         
+        dist_pos = np.sqrt((self.x - target_center_x)**2 + (self.y - target_center_y)**2)
         dist_angle = abs(self.angle - self.target_angle)
         dist_angle = min(dist_angle, 360 - dist_angle)
 
         if dist_pos < self.snap_threshold_pos and dist_angle < self.snap_threshold_angle:
             self.is_solved = True
             self.is_held = False
-            self.x = self.target_x + self.w // 2
-            self.y = self.target_y + self.h // 2
+            self.x = target_center_x # Encajar en el centro
+            self.y = target_center_y
             self.angle = self.target_angle
-            print("¡Pieza encajada (Posición y Ángulo)!")
-        
+            print(f"¡Pieza ({self.target_x}, {self.target_y}) encajada!")
         return self.is_solved
 
-# --- 6. OPCIONES DE MEDIAPIPE ---
+# --- 6. DEFINICIÓN DE NIVELES (Paso 10) ---
+PUZZLE_DEFINITIONS = {
+    "pato": {
+        "folder": "images/pato/",
+        "grid_size": (2, 2), # 2 filas, 2 columnas
+        "difficulty": "facil"
+    },
+    "otro_puzzle": {
+        "folder": "images/otro/",
+        "grid_size": (3, 2), # 3 filas, 2 columnas
+        "difficulty": "medio"
+    }
+    # (Aquí añadirías tus otros 2 puzzles)
+}
+
+# --- 7. NUEVA FUNCIÓN: CARGAR PUZZLE (Paso 10) ---
+def load_puzzle(puzzle_name, grid_origin):
+    """Carga un puzzle desde las definiciones y crea los objetos PuzzlePiece."""
+    if puzzle_name not in PUZZLE_DEFINITIONS:
+        raise ValueError(f"Puzzle '{puzzle_name}' no definido.")
+    
+    definition = PUZZLE_DEFINITIONS[puzzle_name]
+    folder = definition["folder"]
+    rows, cols = definition["grid_size"]
+    (ox, oy) = grid_origin
+    
+    pieces = []
+    for r in range(rows):
+        for c in range(cols):
+            # Ruta de la imagen de la pieza
+            img_path = f"{folder}piece_{r}_{c}.png"
+            
+            # Dónde debe encajar esta pieza (esquina superior izquierda)
+            target_x = ox + c * PIECE_SIZE
+            target_y = oy + r * PIECE_SIZE
+            
+            # El ángulo de meta es 0 (¡siempre!)
+            target_angle = 0 
+            
+            # Ángulo inicial aleatorio (0, 90, 180, 270)
+            initial_angle = random.choice([0, 90, 180, 270])
+            
+            piece = PuzzlePiece(img_path, target_x, target_y, target_angle, initial_angle)
+            pieces.append(piece)
+            
+    return pieces, definition["grid_size"]
+
+
+# --- 8. OPCIONES DE MEDIAPIPE ---
 options = HandLandmarkerOptions(
     base_options=BaseOptions(model_asset_path='models/hand_landmarker.task'),
     running_mode=VisionRunningMode.VIDEO,
     num_hands=2
 )
 
-# --- 7. CREAR PIEZA DE PUZZLE ---
-piece1 = PuzzlePiece(img_path='images/piece1.png', 
-                     target_x=400, 
-                     target_y=200, 
-                     target_angle=90)
-
-# --- 8. BUCLE PRINCIPAL (MODIFICADO PARA GESTOS) ---
+# --- 9. BUCLE PRINCIPAL (MODIFICADO) ---
 with HandLandmarker.create_from_options(options) as landmarker:
     cap = cv2.VideoCapture(0)
     if not cap.isOpened(): sys.exit(1)
@@ -193,92 +215,107 @@ with HandLandmarker.create_from_options(options) as landmarker:
     if fps == 0: fps = 30
     frame_ms = int(1000 / fps)
     timestamp = 0
-    
-    # Cooldown para rotación (evita 30 rotaciones por segundo)
     rotate_cooldown = 0
-    COOLDOWN_FRAMES = 10 # Medio segundo aprox.
+    COOLDOWN_FRAMES = 10 
+
+    ret, frame = cap.read()
+    if not ret: sys.exit(1)
+    h, w, _ = frame.shape
+    
+    # --- Cargar el puzzle! (Paso 10) ---
+    GRID_ORIGIN = (300, 140) # Esquina superior-izquierda de la cuadrícula
+    try:
+        puzzle_pieces, grid_size = load_puzzle("pato", GRID_ORIGIN)
+    except FileNotFoundError as e:
+        print(f"Error al cargar el puzzle: {e}")
+        print("Asegúrate de haber creado las imágenes en 'images/pato/' con los nombres correctos.")
+        sys.exit(1)
+    
+    held_piece = None
+    game_won = False
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
 
-        frame = cv2.flip(frame, 1)
-        h, w, _ = frame.shape
+        canvas = np.full((h, w, 3), (220, 245, 245), dtype="uint8")
 
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-
         result = landmarker.detect_for_video(mp_image, timestamp)
         timestamp += frame_ms
         
-        # Actualizar cooldown
         if rotate_cooldown > 0:
             rotate_cooldown -= 1
 
-        # --- LÓGICA DE DETECCIÓN DE GESTOS (Paso 7) ---
-        pinch_pos = None # Posición del pellizco (normalizada 0-1)
-        point_pos = None # Posición del puntero (normalizada 0-1)
+        pinch_pos, point_pos = None, None 
 
         if result.hand_landmarks:
             for hand_landmarks_list in result.hand_landmarks:
-                
-                # (Dibujar la mano)
-                hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-                hand_landmarks_proto.landmark.extend([
-                    landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) 
-                    for landmark in hand_landmarks_list
-                ])
-                mp_drawing.draw_landmarks(frame, hand_landmarks_proto, mp_hands.HAND_CONNECTIONS,
-                                          mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
-                                          mp.solutions.drawing_styles.get_default_hand_connections_style())
-
-                # Detectar gesto en esta mano
                 gesture, pos = detect_gesture(hand_landmarks_list)
-                
+                cursor_pos_x = int(pos[0] * w)
+                cursor_pos_y = int(pos[1] * h)
+                cursor_pos_x = w - cursor_pos_x # Espejo
+
                 if gesture == "PINCH":
-                    pinch_pos = pos
-                    # Dibujar círculo de pellizco
-                    cv2.circle(frame, (int(pos[0]*w), int(pos[1]*h)), 10, (0, 255, 0), -1)
-
+                    pinch_pos = (pos[0], pos[1]) 
+                    cv2.circle(canvas, (cursor_pos_x, cursor_pos_y), 15, (0, 255, 0), -1)
                 elif gesture == "POINT":
-                    point_pos = pos
-                    # Dibujar círculo de puntero
-                    cv2.circle(frame, (int(pos[0]*w), int(pos[1]*h)), 10, (0, 0, 255), -1)
+                    point_pos = (pos[0], pos[1])
+                    cv2.circle(canvas, (cursor_pos_x, cursor_pos_y), 15, (255, 0, 0), -1)
+                elif gesture == "HAND":
+                    cv2.circle(canvas, (cursor_pos_x, cursor_pos_y), 10, (0, 0, 255), -1)
         
-        # --- LÓGICA DE ESTADO DEL JUEGO (Paso 7) ---
-        if not piece1.is_solved:
-            if not piece1.is_held:
-                # --- ESTADO: Suelto ---
-                # Si hay pellizco y colisiona, agarrar
+        if not game_won:
+            if held_piece is None:
                 if pinch_pos:
-                    pinch_pixel_pos = (int(pinch_pos[0]*w), int(pinch_pos[1]*h))
-                    if piece1.check_collision(pinch_pixel_pos):
-                        piece1.is_held = True
-                        print("¡Agarrada!")
+                    pinch_pixel_x, pinch_pixel_y = int((1.0 - pinch_pos[0]) * w), int(pinch_pos[1] * h)
+                    # Comprobar colisión (de la más alta a la más baja, para agarrar la de encima)
+                    for piece in reversed(puzzle_pieces):
+                        if not piece.is_solved and piece.check_collision((pinch_pixel_x, pinch_pixel_y)):
+                            held_piece = piece
+                            held_piece.is_held = True
+                            print(f"¡Agarrada pieza de meta ({held_piece.target_x}, {held_piece.target_y})!")
+                            break 
             else:
-                # --- ESTADO: Agarrado ---
                 if not pinch_pos:
-                    # 1. No hay pellizco: Soltar
-                    piece1.is_held = False
-                    print("¡Soltada!")
-                    piece1.snap_to_target()
+                    held_piece.is_held = False
+                    held_piece.snap_to_target()
+                    held_piece = None
                 else:
-                    # 2. Sigue el pellizco: Mover
-                    pinch_pixel_pos = (int(pinch_pos[0]*w), int(pinch_pos[1]*h))
-                    piece1.update_position(pinch_pixel_pos)
+                    pinch_pixel_x, pinch_pixel_y = int((1.0 - pinch_pos[0]) * w), int(pinch_pos[1] * h)
+                    held_piece.update_position((pinch_pixel_x, pinch_pixel_y))
                     
-                    # 3. ¿Hay un puntero "tocando" la pieza?
                     if point_pos and rotate_cooldown == 0:
-                        point_pixel_pos = (int(point_pos[0]*w), int(point_pos[1]*h))
-                        if piece1.check_collision(point_pixel_pos):
-                            piece1.rotate_piece()
-                            rotate_cooldown = COOLDOWN_FRAMES # Activar cooldown
+                        point_pixel_x, point_pixel_y = int((1.0 - point_pos[0]) * w), int(point_pos[1] * h)
+                        if held_piece.check_collision((point_pixel_x, point_pixel_y)):
+                            held_piece.rotate_piece()
+                            rotate_cooldown = COOLDOWN_FRAMES 
 
-        piece1.draw(frame)
-        cv2.imshow("Hand Landmarker - Paso 7 (Pellizco y Puntero)", frame)
+        # --- DIBUJAR CUADRÍCULA (Paso 10) ---
+        draw_grid(canvas, GRID_ORIGIN, grid_size, PIECE_SIZE)
+
+        # --- DIBUJAR PIEZAS ---
+        for piece in puzzle_pieces:
+            if piece is not held_piece:
+                piece.draw(canvas)
+        if held_piece:
+            held_piece.draw(canvas)
+
+        if not game_won:
+            if all(p.is_solved for p in puzzle_pieces):
+                game_won = True
+                print("¡HAS GANADO!")
+                
+        if game_won:
+            # --- Arreglado el texto de victoria ---
+            cv2.putText(canvas, "HAS GANADO", (w//2 - 190, h//2), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 4)
+
+        cv2.imshow("Juego de Puzzle IPM - Paso 10", canvas)
 
         key = cv2.waitKey(5) & 0xFF
-        if key == 27: # ESC
+        if key == 27:
             break
         
     cap.release()
