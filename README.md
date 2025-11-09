@@ -1,7 +1,6 @@
-# IPM - Práctica 2 
+# IPM - Práctica 2
 
 ![mediapipe_game_ipm](https://github.com/user-attachments/assets/1c51471e-8b4b-4f56-bd25-9cebfacb2af2)
-
 
 ## Introducción
 
@@ -11,10 +10,10 @@ En esta práctica se ha hecho uso de **MediaPipe**, un framework de código abie
 
 Este repositorio contiene un juego sencillo usando la librería de MediaPipe que puede servir como guía para el desarrollo de la práctica. Para crear vuesto videojuego, podéis hacer uso de los modelos que ofrece MediaPipe en su página oficial:
 
-- *```Pose Landmarker```* (usado en este repositorio), [aquí](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker?hl=es-419).
-- *```Hand Landmarker```*, [aquí](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker?hl=es-419).
-- *```Face Landmarker```*, [aquí](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/index?hl=es-419).
-- *```Holistic Landmarker```*, [aquí](https://ai.google.dev/edge/mediapipe/solutions/vision/holistic_landmarker?hl=es-419).
+- *``Pose Landmarker``* (usado en este repositorio), [aquí](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker?hl=es-419).
+- *``Hand Landmarker``*, [aquí](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker?hl=es-419).
+- *``Face Landmarker``*, [aquí](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/index?hl=es-419).
+- *``Holistic Landmarker``*, [aquí](https://ai.google.dev/edge/mediapipe/solutions/vision/holistic_landmarker?hl=es-419).
 
 ## Prerequisitos
 
@@ -23,6 +22,7 @@ Tener instalado **Conda**, [instalar aquí](https://www.anaconda.com/docs/gettin
 ## Requisitos
 
 Crear un entorno de conda:
+
 ```bash
 conda create -n IPM python=3.12
 conda activate IPM
@@ -31,6 +31,7 @@ conda activate IPM
 ## Instalación
 
 Se instalan las dependencias necesarias (MediaPipe, Requests, tqdm, cv2, numpy, etc.):
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -38,15 +39,28 @@ pip install -r requirements.txt
 ## Descargar pesos
 
 Script para poder descargar los pesos del modelo *Pose Landmarker*:
+
 ```bash
 python download_models.py
 ```
 
 Para descargar los pesos de otros modelos como _Hand Landmarker_, _Face Landmarker_ u _Holisitc Landmarker_ debes de descargarlos de los [enlaces](https://github.com/CarloHSUA/IPM/tree/main?tab=readme-ov-file#introducci%C3%B3n) de la página oficial de MediaPipe
 
-
-
 ## Ejecución
+
 ```bash
+python app.py
+```
+
+Extra: tienes que abrir conda y hacer una maquina virtual con python 3.12.
+
+```bash
+conda create -n IPM python=3.12
+conda activate IPM
+mkdir IPM
+cd IPM
+git clone https://github.com/aps209/IPM
+python download_models.py
+pip install -r requirements.txt
 python app.py
 ```
