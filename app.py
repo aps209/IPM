@@ -3,7 +3,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import time
-import random # <-- 1. Importar random
+import random 
 
 # --- 1. IMPORTACIONES ---
 BaseOptions = mp.tasks.BaseOptions
@@ -16,10 +16,10 @@ mp_hands = mp.solutions.hands
 
 from mediapipe.framework.formats import landmark_pb2 
 
-# --- CONSTANTES DEL JUEGO (Paso 10) ---
-PIECE_SIZE = 100 # Ancho y Alto de cada pieza
-GRID_COLOR = (100, 100, 100) # Color de la cuadrícula
-SPAWN_X_LIMIT = 250 # Límite en X para que aparezcan las piezas
+# --- CONSTANTES DEL JUEGO ---
+PIECE_SIZE = 100 
+GRID_COLOR = (100, 100, 100) 
+SPAWN_X_LIMIT = 250 
 
 # --- 2. FUNCIONES DE GESTOS Y DISTANCIA ---
 def get_normalized_distance(landmark1, landmark2) -> float:
@@ -35,7 +35,7 @@ def detect_gesture(hand_landmarks_list):
         return "PINCH", pos
 
     index_mcp = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_MCP]
-    index_tip = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_TIP] # Re-definimos index_tip
+    index_tip = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_TIP]
     middle_tip = hand_landmarks_list[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
     ring_tip = hand_landmarks_list[mp_hands.HandLandmark.RING_FINGER_TIP]
     pinky_tip = hand_landmarks_list[mp_hands.HandLandmark.PINKY_TIP]
@@ -65,9 +65,8 @@ def overlay_transparent(background, overlay, x, y):
     blended_roi = (alpha_mask * overlay_bgr + alpha_mask_inv * roi).astype(np.uint8)
     background[y1:y2, x1:x2] = blended_roi
 
-# --- 4. NUEVA FUNCIÓN: DIBUJAR CUADRÍCULA (Paso 10) ---
+# --- 4. FUNCIÓN: DIBUJAR CUADRÍCULA ---
 def draw_grid(canvas, grid_origin, grid_size, piece_size):
-    """Dibuja la cuadrícula de la meta en el canvas."""
     rows, cols = grid_size
     (ox, oy) = grid_origin
     for r in range(rows + 1):
@@ -77,37 +76,26 @@ def draw_grid(canvas, grid_origin, grid_size, piece_size):
         x = ox + c * piece_size
         cv2.line(canvas, (x, oy), (x, oy + rows * piece_size), GRID_COLOR, 2)
 
-
-# --- 5. CLASE: PIEZA DEL PUZZLE (Modificada) ---
+# --- 5. CLASE: PIEZA DEL PUZZLE ---
 class PuzzlePiece:
-    # --- Modificado: Acepta ángulo inicial ---
     def __init__(self, img_path, target_x, target_y, target_angle, initial_angle):
         self.original_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         if self.original_img is None:
             raise FileNotFoundError(f"No se pudo cargar la imagen: {img_path}")
-        
-        # Redimensionar a nuestro tamaño estándar
         self.original_img = cv2.resize(self.original_img, (PIECE_SIZE, PIECE_SIZE), interpolation=cv2.INTER_AREA)
         self.h, self.w = self.original_img.shape[:2]
-        
-        # --- Modificado: Posición inicial aleatoria a la izquierda ---
         self.x = np.random.randint(self.w // 2, SPAWN_X_LIMIT - self.w // 2)
-        self.y = np.random.randint(self.h // 2, 480 - self.h // 2) # Asumiendo 480 de alto
+        self.y = np.random.randint(self.h // 2, 480 - self.h // 2) 
         self.angle = initial_angle
-        
         self.target_x = target_x
         self.target_y = target_y
         self.target_angle = target_angle 
-        
         self.is_held = False
         self.is_solved = False
-        self.target_color = (150, 150, 150)
         self.snap_threshold_pos = 25
         self.snap_threshold_angle = 10 
 
     def draw(self, frame):
-        # (Ya no dibujamos el 'target_rect' aquí, se dibuja la cuadrícula global)
-        
         center = (self.w // 2, self.h // 2)
         M = cv2.getRotationMatrix2D(center, self.angle, 1.0)
         cos, sin = np.abs(M[0, 0]), np.abs(M[0, 1])
@@ -134,41 +122,37 @@ class PuzzlePiece:
         return dist < self.w / 2 
 
     def snap_to_target(self):
-        # Comprobar contra el *centro* de la meta
         target_center_x = self.target_x + self.w // 2
         target_center_y = self.target_y + self.h // 2
-        
         dist_pos = np.sqrt((self.x - target_center_x)**2 + (self.y - target_center_y)**2)
         dist_angle = abs(self.angle - self.target_angle)
         dist_angle = min(dist_angle, 360 - dist_angle)
-
         if dist_pos < self.snap_threshold_pos and dist_angle < self.snap_threshold_angle:
             self.is_solved = True
             self.is_held = False
-            self.x = target_center_x # Encajar en el centro
+            self.x = target_center_x 
             self.y = target_center_y
             self.angle = self.target_angle
             print(f"¡Pieza ({self.target_x}, {self.target_y}) encajada!")
         return self.is_solved
 
-# --- 6. DEFINICIÓN DE NIVELES (Paso 10) ---
+# --- 6. DEFINICIÓN DE NIVELES (Paso 11) ---
 PUZZLE_DEFINITIONS = {
     "pato": {
         "folder": "images/pato/",
         "grid_size": (2, 2), # 2 filas, 2 columnas
-        "difficulty": "facil"
+        "difficulty": 1 # Multiplicador de puntuación (Fácil)
     },
-    "otro_puzzle": {
-        "folder": "images/otro/",
-        "grid_size": (3, 2), # 3 filas, 2 columnas
-        "difficulty": "medio"
+    "gato": {
+        "folder": "images/gato/", # <-- AÑADE TUS IMÁGENES AQUÍ
+        "grid_size": (3, 2), # 3 filas, 2 columnas (6 piezas)
+        "difficulty": 2 # (Medio)
     }
-    # (Aquí añadirías tus otros 2 puzzles)
+    # (Añade aquí tu puzzle de 7 piezas como "dificil")
 }
 
-# --- 7. NUEVA FUNCIÓN: CARGAR PUZZLE (Paso 10) ---
+# --- 7. FUNCIÓN: CARGAR PUZZLE ---
 def load_puzzle(puzzle_name, grid_origin):
-    """Carga un puzzle desde las definiciones y crea los objetos PuzzlePiece."""
     if puzzle_name not in PUZZLE_DEFINITIONS:
         raise ValueError(f"Puzzle '{puzzle_name}' no definido.")
     
@@ -180,23 +164,16 @@ def load_puzzle(puzzle_name, grid_origin):
     pieces = []
     for r in range(rows):
         for c in range(cols):
-            # Ruta de la imagen de la pieza
             img_path = f"{folder}piece_{r}_{c}.png"
-            
-            # Dónde debe encajar esta pieza (esquina superior izquierda)
             target_x = ox + c * PIECE_SIZE
             target_y = oy + r * PIECE_SIZE
-            
-            # El ángulo de meta es 0 (¡siempre!)
             target_angle = 0 
-            
-            # Ángulo inicial aleatorio (0, 90, 180, 270)
             initial_angle = random.choice([0, 90, 180, 270])
-            
             piece = PuzzlePiece(img_path, target_x, target_y, target_angle, initial_angle)
             pieces.append(piece)
-            
-    return pieces, definition["grid_size"]
+    
+    # Devuelve también la definición para usarla en la puntuación
+    return pieces, definition["grid_size"], definition["difficulty"]
 
 
 # --- 8. OPCIONES DE MEDIAPIPE ---
@@ -222,17 +199,27 @@ with HandLandmarker.create_from_options(options) as landmarker:
     if not ret: sys.exit(1)
     h, w, _ = frame.shape
     
-    # --- Cargar el puzzle! (Paso 10) ---
-    GRID_ORIGIN = (300, 140) # Esquina superior-izquierda de la cuadrícula
+    # --- Cargar el puzzle ALEATORIO (Paso 11) ---
+    GRID_ORIGIN = (w - (PIECE_SIZE * 3), h // 2 - (PIECE_SIZE)) # Centrar cuadrícula 
+    
+    # --- Lógica de selección aleatoria ---
+    puzzle_names = list(PUZZLE_DEFINITIONS.keys())
+    loaded_puzzle_name = random.choice(puzzle_names)
+    print(f"--- Cargando puzzle aleatorio: {loaded_puzzle_name} ---")
+    
     try:
-        puzzle_pieces, grid_size = load_puzzle("pato", GRID_ORIGIN)
+        puzzle_pieces, grid_size, difficulty = load_puzzle(loaded_puzzle_name, GRID_ORIGIN)
     except FileNotFoundError as e:
-        print(f"Error al cargar el puzzle: {e}")
-        print("Asegúrate de haber creado las imágenes en 'images/pato/' con los nombres correctos.")
+        print(f"Error: {e}")
+        print(f"Asegúrate de que la carpeta '{loaded_puzzle_name}' y sus piezas existen.")
         sys.exit(1)
     
+    # --- Variables de estado del juego (Paso 11) ---
     held_piece = None
     game_won = False
+    start_time = time.time() # <-- INICIAR CRONÓMETRO
+    elapsed_time = 0
+    final_score = 0
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -255,7 +242,7 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 gesture, pos = detect_gesture(hand_landmarks_list)
                 cursor_pos_x = int(pos[0] * w)
                 cursor_pos_y = int(pos[1] * h)
-                cursor_pos_x = w - cursor_pos_x # Espejo
+                cursor_pos_x = w - cursor_pos_x 
 
                 if gesture == "PINCH":
                     pinch_pos = (pos[0], pos[1]) 
@@ -266,16 +253,15 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 elif gesture == "HAND":
                     cv2.circle(canvas, (cursor_pos_x, cursor_pos_y), 10, (0, 0, 255), -1)
         
+        # --- LÓGICA DE JUEGO ---
         if not game_won:
             if held_piece is None:
                 if pinch_pos:
                     pinch_pixel_x, pinch_pixel_y = int((1.0 - pinch_pos[0]) * w), int(pinch_pos[1] * h)
-                    # Comprobar colisión (de la más alta a la más baja, para agarrar la de encima)
                     for piece in reversed(puzzle_pieces):
                         if not piece.is_solved and piece.check_collision((pinch_pixel_x, pinch_pixel_y)):
                             held_piece = piece
                             held_piece.is_held = True
-                            print(f"¡Agarrada pieza de meta ({held_piece.target_x}, {held_piece.target_y})!")
                             break 
             else:
                 if not pinch_pos:
@@ -292,27 +278,39 @@ with HandLandmarker.create_from_options(options) as landmarker:
                             held_piece.rotate_piece()
                             rotate_cooldown = COOLDOWN_FRAMES 
 
-        # --- DIBUJAR CUADRÍCULA (Paso 10) ---
+        # --- DIBUJADO ---
         draw_grid(canvas, GRID_ORIGIN, grid_size, PIECE_SIZE)
-
-        # --- DIBUJAR PIEZAS ---
         for piece in puzzle_pieces:
             if piece is not held_piece:
                 piece.draw(canvas)
         if held_piece:
             held_piece.draw(canvas)
 
+        # --- LÓGICA DE VICTORIA Y PUNTUACIÓN (Paso 11) ---
         if not game_won:
             if all(p.is_solved for p in puzzle_pieces):
                 game_won = True
-                print("¡HAS GANADO!")
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+                # Puntuación: 10000 * dificultad / segundos
+                final_score = (10000 * difficulty) / elapsed_time 
+                print(f"¡HAS GANADO! Tiempo: {elapsed_time:.2f}s, Puntuación: {final_score:.0f}")
                 
         if game_won:
-            # --- Arreglado el texto de victoria ---
-            cv2.putText(canvas, "HAS GANADO", (w//2 - 190, h//2), 
+            # Mostrar pantalla de victoria
+            cv2.putText(canvas, "HAS GANADO", (w//2 - 190, h//2 - 60), 
                         cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 4)
+            cv2.putText(canvas, f"Tiempo: {elapsed_time:.2f}s", (w//2 - 150, h//2 + 10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+            cv2.putText(canvas, f"Puntuacion: {final_score:.0f}", (w//2 - 160, h//2 + 70), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 2)
+        else:
+            # Mostrar tiempo actual
+            current_elapsed = time.time() - start_time
+            cv2.putText(canvas, f"Tiempo: {current_elapsed:.1f}", (10, h - 20), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
 
-        cv2.imshow("Juego de Puzzle IPM - Paso 10", canvas)
+        cv2.imshow("Juego de Puzzle IPM - Paso 11", canvas)
 
         key = cv2.waitKey(5) & 0xFF
         if key == 27:
