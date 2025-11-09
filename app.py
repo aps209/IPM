@@ -3,144 +3,177 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import time
-from config import config
 
-
-# Configuración de la tarea
+# --- 1. IMPORTACIONES ---
 BaseOptions = mp.tasks.BaseOptions
-PoseLandmarker = mp.tasks.vision.PoseLandmarker
-PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+HandLandmarker = mp.tasks.vision.HandLandmarker
+HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
 
-options = PoseLandmarkerOptions(
-    base_options=BaseOptions(model_asset_path=config.model_path),
-    running_mode=VisionRunningMode.VIDEO,
-    num_poses=1
-)
+mp_drawing = mp.solutions.drawing_utils
+mp_hands = mp.solutions.hands
 
-# L2 Norm entre la mano y el punto objetivo (azul) 
-def calculate_distance(point1, point2) -> float:
-    distance = np.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
+# Necesitamos este formato para que 'draw_landmarks' funcione
+from mediapipe.framework.formats import landmark_pb2 
+
+
+# --- 2. FUNCIÓN DE DISTANCIA (Paso 2) ---
+def get_normalized_distance(landmark1, landmark2) -> float:
+    distance = np.sqrt((landmark1.x - landmark2.x)**2 + (landmark1.y - landmark2.y)**2)
     return distance
 
-# Crea una nueva capa y una posición random para el objetivo
-def new_circle(padding) -> None:
-    global circle_layer, random_circle_position
-    circle_layer =  np.zeros((int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), 3), dtype=np.uint8)
-    random_circle_position = (np.random.randint(padding, circle_layer.shape[1]-padding), np.random.randint(padding, circle_layer.shape[0]-padding))
+# --- 3. NUEVA CLASE: PIEZA DEL PUZZLE (Paso 3) ---
+class PuzzlePiece:
+    def __init__(self, x, y, target_x, target_y, size=50):
+        self.x = x
+        self.y = y
+        self.target_x = target_x
+        self.target_y = target_y
+        self.size = size
+        self.is_held = False
+        self.is_solved = False
+        self.color = (255, 0, 0) # Azul (sin resolver)
+        self.solved_color = (0, 255, 0) # Verde (resuelto)
+        self.target_color = (150, 150, 150) # Gris (meta)
+        self.snap_threshold = 20
 
-# Inicializar landmarker
-with PoseLandmarker.create_from_options(options) as landmarker:
-    cap = cv2.VideoCapture(0)  # Abrir cámara
+    def draw(self, frame):
+        cv2.rectangle(frame, (self.target_x, self.target_y), 
+                      (self.target_x + self.size, self.target_y + self.size), 
+                      self.target_color, 2)
+        
+        current_color = self.solved_color if self.is_solved else self.color
+        cv2.rectangle(frame, (self.x, self.y), 
+                      (self.x + self.size, self.y + self.size), 
+                      current_color, -1)
+
+    def update_position(self, x, y):
+        if self.is_held:
+            self.x = x - self.size // 2
+            self.y = y - self.size // 2
+
+    def check_collision(self, pinch_x, pinch_y) -> bool:
+        return (self.x < pinch_x < self.x + self.size) and \
+               (self.y < pinch_y < self.y + self.size)
+
+    def snap_to_target(self):
+        center_x = self.x + self.size // 2
+        center_y = self.y + self.size // 2
+        target_center_x = self.target_x + self.size // 2
+        target_center_y = self.target_y + self.size // 2
+        
+        dist = np.sqrt((center_x - target_center_x)**2 + (center_y - target_center_y)**2)
+        
+        if dist < self.snap_threshold:
+            self.is_solved = True
+            self.is_held = False
+            self.x = self.target_x
+            self.y = self.target_y
+            print("¡Pieza encajada!")
+        
+        return self.is_solved
+
+# --- 4. OPCIONES DE MEDIAPIPE ---
+options = HandLandmarkerOptions(
+    base_options=BaseOptions(model_asset_path='models/hand_landmarker.task'),
+    running_mode=VisionRunningMode.VIDEO,
+    num_hands=2
+)
+
+# --- 5. CREAR NUESTRA PIEZA DE PUZZLE ---
+piece1 = PuzzlePiece(x=100, y=100, target_x=400, target_y=200, size=50)
+
+# --- 6. BUCLE PRINCIPAL ---
+with HandLandmarker.create_from_options(options) as landmarker:
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: No se puede abrir la cámara.")
+        sys.exit(1)
+
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0:  # seguridad si la cámara no da fps
-        fps = 30
-
-    mp_pose = mp.solutions.pose
-
+    if fps == 0: fps = 30
     frame_ms = int(1000 / fps)
+    timestamp = 0
 
-    # Inicializar valores
-    timestamp = start_time = end_time = sum_t = counter = final_counter = 0
-
-    blue_back = np.zeros((int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), 3), dtype=np.uint8)
-    blue_back[:] = (255, 0, 0)
-
-    new_circle(config.padding)
+    PINCH_THRESHOLD = 0.07 
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        # Voltear frame horizontalmente
         frame = cv2.flip(frame, 1)
+        h, w, _ = frame.shape
 
-        # Dibuja el circulo random en el frame
-        cv2.circle(circle_layer, random_circle_position, 20, (255, 255, 255), -1)
-        h, w = circle_layer.shape[:2]
-        frame = np.where(circle_layer != 0, blue_back, frame)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
-        # Variables de tiempo
-        t = end_time - start_time
-        sum_t += t
-        start_time = time.time()
-
-        # Convertir frame a formato MediaPipe
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-
-        # Ejecutar detección
         result = landmarker.detect_for_video(mp_image, timestamp)
         timestamp += frame_ms
 
-        # Dibujar landmarks si los hay
-        if result.pose_landmarks:
-            for person_landmarks in result.pose_landmarks:  # para mantener tu estructura
-                h, w, _ = frame.shape
+        is_pinching = False
+        pinch_x, pinch_y = 0, 0
 
-                # Dibuja líneas entre los landmarks
-                for connection in mp_pose.POSE_CONNECTIONS:
-                    start_idx, end_idx = connection
-                    start = person_landmarks[start_idx]
-                    end = person_landmarks[end_idx]
+        # --- LÓGICA DE DETECCIÓN ---
+        if result.hand_landmarks:
+            for hand_landmarks_list in result.hand_landmarks:
+                
+                # --- INICIO DE LA CORRECCIÓN ---
+                hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+                
+                # Convertimos la lista de Python (Formato A) a la lista Protobuf (Formato B)
+                hand_landmarks_proto.landmark.extend([
+                    landmark_pb2.NormalizedLandmark(
+                        x=landmark.x, y=landmark.y, z=landmark.z
+                    ) for landmark in hand_landmarks_list
+                ])
+                # --- FIN DE LA CORRECCIÓN ---
 
-                    x1, y1 = int(start.x * w), int(start.y * h)
-                    x2, y2 = int(end.x * w), int(end.y * h)
+                # Dibujar usando el objeto 'proto'
+                mp_drawing.draw_landmarks(
+                    image=frame,
+                    landmark_list=hand_landmarks_proto, # <- Usamos el objeto corregido
+                    connections=mp_hands.HAND_CONNECTIONS,
+                    landmark_drawing_spec=mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
+                    connection_drawing_spec=mp.solutions.drawing_styles.get_default_hand_connections_style()
+                )
 
-                    cv2.line(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                # Lógica de pellizco
+                thumb_tip = hand_landmarks_list[mp_hands.HandLandmark.THUMB_TIP]
+                # --- CORRECCIÓN DE ERROR TIPOGRÁFICO AQUÍ ---
+                index_tip = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                pinch_distance = get_normalized_distance(thumb_tip, index_tip)
 
-                # Dibuja los puntos (landmarks)
-                for idx, landmark in enumerate(person_landmarks):
-                    x, y = int(landmark.x * w), int(landmark.y * h)
-                    cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
-
-                landmarks_points = [(landmark.x, landmark.y) for landmark in [person_landmarks[19], person_landmarks[20]]]
-                for landmark in landmarks_points:
-                    h, w, _ = frame.shape
-                    x, y = int(landmark[0] * w), int(landmark[1] * h)
-                    if calculate_distance(landmark, (random_circle_position[0]/w, random_circle_position[1]/h)) < 0.05:
-                        counter += 1
-                        sum_t = 0
-                        new_circle(config.padding)
-                        break
-
-        if sum_t > config.circle_time:
-            sum_t = 0
-            new_circle(config.padding)
-        else:
-            radius = int((20 + config.circle_time) - (config.circle_time_radius * (sum_t - config.circle_time)) / config.circle_time)
-            cv2.circle(frame, random_circle_position, radius, (255, 255, 255), 2)
-
-        end_time = time.time()
-
-        # Mostrar tiempo restante de juego y puntos obtenidos
-        cv2.putText(frame, f'Time: {config.game_time:.2f} - Points: {counter}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                if pinch_distance < PINCH_THRESHOLD:
+                    is_pinching = True
+                    pinch_x = int((thumb_tip.x + index_tip.x) * w / 2)
+                    pinch_y = int((thumb_tip.y + index_tip.y) * h / 2)
+                    
+                    cv2.circle(frame, (pinch_x, pinch_y), 10, (0, 255, 0), -1)
+                    break 
         
-        config.game_time -= t
-        
-        if config.game_time <= 0:
-            frame = np.zeros((int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), 3), dtype=np.uint8)
-            cv2.putText(frame, f'Score: {final_counter} points', (180, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(frame, f'Press Enter to continue ...', (120, 160), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(frame, f'Press ESC to exit', (180, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 128, 0), 2)
+        # --- LÓGICA DE ESTADO DEL JUEGO ---
+        if not piece1.is_solved:
+            if is_pinching:
+                if piece1.is_held:
+                    piece1.update_position(pinch_x, pinch_y)
+                else:
+                    if piece1.check_collision(pinch_x, pinch_y):
+                        piece1.is_held = True
+                        print("¡Agarrada!")
+            else:
+                if piece1.is_held:
+                    piece1.is_held = False
+                    print("¡Soltada!")
+                    piece1.snap_to_target()
 
-            # Tecla Enter para jugar
-            if cv2.waitKey(1) & 0xFF == 13:
-                config.game_time = 20
-                counter = 0
-            
-            # Tecla ESC para salir
-            if cv2.waitKey(1) & 0xFF == 27:
-                sys.exit(0)
-        else:
-            final_counter = counter
+        # --- DIBUJAR LA PIEZA (SIEMPRE) ---
+        piece1.draw(frame)
 
-        # Mostrar resultado
-        cv2.imshow("Pose Landmarker", frame)
+        cv2.imshow("Hand Landmarker - Paso 3 (Agarrar)", frame)
 
-        # Tecla ESC para salir
-        if cv2.waitKey(1) & 0xFF == 27:
-            sys.exit(0)
+        if cv2.waitKey(5) & 0xFF == 27:
+            break
 
     cap.release()
     cv2.destroyAllWindows()
