@@ -47,6 +47,7 @@ def detect_gesture(hand_landmarks_list):
     return "HAND", pos
 
 # --- 3. FUNCIÓN: COMPOSICIÓN ALFA ---
+# (Esta función es crucial, ahora necesita manejar imágenes BGRA)
 def overlay_transparent(background, overlay, x, y):
     x, y = int(x), int(y)
     h_overlay, w_overlay = overlay.shape[:2]
@@ -56,12 +57,18 @@ def overlay_transparent(background, overlay, x, y):
     y1_overlay, y2_overlay = max(0, -y), max(0, -y) + (y2 - y1)
     x1_overlay, x2_overlay = max(0, -x), max(0, -x) + (x2 - x1)
     if (y2 - y1) <= 0 or (x2 - x1) <= 0: return
+    
+    # Extraer la ROI
     roi = background[y1:y2, x1:x2]
     overlay_crop = overlay[y1_overlay:y2_overlay, x1_overlay:x2_overlay]
+    
+    # --- Composición Alfa ---
+    # Asumimos que el overlay (pieza) es BGRA (4 canales)
     alpha = overlay_crop[:, :, 3] / 255.0
     alpha_mask = cv2.merge([alpha, alpha, alpha])
     alpha_mask_inv = 1.0 - alpha_mask
     overlay_bgr = overlay_crop[:, :, :3]
+    
     blended_roi = (alpha_mask * overlay_bgr + alpha_mask_inv * roi).astype(np.uint8)
     background[y1:y2, x1:x2] = blended_roi
 
@@ -76,20 +83,24 @@ def draw_grid(canvas, grid_origin, grid_size, piece_size):
         x = ox + c * piece_size
         cv2.line(canvas, (x, oy), (x, oy + rows * piece_size), GRID_COLOR, 2)
 
-# --- 5. CLASE: PIEZA DEL PUZZLE ---
+# --- 5. CLASE: PIEZA DEL PUZZLE (MODIFICADA) ---
 class PuzzlePiece:
-    def __init__(self, img_path, target_x, target_y, target_angle, initial_angle):
-        self.original_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
-        if self.original_img is None:
-            raise FileNotFoundError(f"No se pudo cargar la imagen: {img_path}")
-        self.original_img = cv2.resize(self.original_img, (PIECE_SIZE, PIECE_SIZE), interpolation=cv2.INTER_AREA)
+    # --- MODIFICADO: Acepta un 'slice' de imagen (NumPy) en lugar de un 'path' ---
+    def __init__(self, image_slice, target_x, target_y, target_angle, initial_angle):
+        
+        # Redimensionar el 'slice' al tamaño estándar de pieza
+        self.original_img = cv2.resize(image_slice, (PIECE_SIZE, PIECE_SIZE), interpolation=cv2.INTER_AREA)
         self.h, self.w = self.original_img.shape[:2]
+        
+        # Posición inicial aleatoria a la izquierda
         self.x = np.random.randint(self.w // 2, SPAWN_X_LIMIT - self.w // 2)
         self.y = np.random.randint(self.h // 2, 480 - self.h // 2) 
         self.angle = initial_angle
+        
         self.target_x = target_x
         self.target_y = target_y
         self.target_angle = target_angle 
+        
         self.is_held = False
         self.is_solved = False
         self.snap_threshold_pos = 25
@@ -136,43 +147,76 @@ class PuzzlePiece:
             print(f"¡Pieza ({self.target_x}, {self.target_y}) encajada!")
         return self.is_solved
 
-# --- 6. DEFINICIÓN DE NIVELES (Paso 11) ---
+# --- 6. DEFINICIÓN DE NIVELES (MODIFICADA) ---
 PUZZLE_DEFINITIONS = {
     "pato": {
-        "folder": "images/pato/",
-        "grid_size": (2, 2), # 2 filas, 2 columnas
-        "difficulty": 1 # Multiplicador de puntuación (Fácil)
+        "image_file": "images/full_puzzles/leon.png", # Apunta a la imagen completa
+        "grid_size": (2, 2), # La corta en 2x2
+        "difficulty": 1 
     },
     "gato": {
-        "folder": "images/gato/", # <-- AÑADE TUS IMÁGENES AQUÍ
-        "grid_size": (3, 2), # 3 filas, 2 columnas (6 piezas)
-        "difficulty": 2 # (Medio)
+        "image_file": "images/full_puzzles/pato.jpg", # Apunta a la imagen completa
+        "grid_size": (9, 9), # La corta en 3x2 (6 piezas)
+        "difficulty": 2 
     }
-    # (Añade aquí tu puzzle de 7 piezas como "dificil")
+    # Añade tu puzzle de 7 piezas aquí
+    # "leon": {
+    #     "image_file": "images/full_puzzles/leon.jpg", 
+    #     "grid_size": (3, 3), # (9 piezas)
+    #     "difficulty": 3 
+    # }
 }
 
-# --- 7. FUNCIÓN: CARGAR PUZZLE ---
+# --- 7. FUNCIÓN: CARGAR PUZZLE (MODIFICADA) ---
 def load_puzzle(puzzle_name, grid_origin):
     if puzzle_name not in PUZZLE_DEFINITIONS:
         raise ValueError(f"Puzzle '{puzzle_name}' no definido.")
     
     definition = PUZZLE_DEFINITIONS[puzzle_name]
-    folder = definition["folder"]
     rows, cols = definition["grid_size"]
     (ox, oy) = grid_origin
+    
+    # --- INICIO DE LA LÓGICA DE CORTE ---
+    # Cargar la imagen completa (con transparencia si la tiene)
+    full_image = cv2.imread(definition["image_file"], cv2.IMREAD_UNCHANGED)
+    
+    if full_image is None:
+        raise FileNotFoundError(f"No se pudo cargar la imagen: {definition['image_file']}")
+        
+    # Asegurarse de que la imagen sea BGRA (4 canales)
+    # Si es BGR (3 canales, como un JPG), añadir un canal Alfa
+    if full_image.shape[2] == 3:
+        full_image = cv2.cvtColor(full_image, cv2.COLOR_BGR2BGRA)
+    elif full_image.shape[2] != 4:
+        raise ValueError("La imagen del puzzle debe ser BGR (3 canales) o BGRA (4 canales)")
+
+    # Calcular el tamaño de cada "trozo"
+    img_h, img_w = full_image.shape[:2]
+    slice_height = img_h // rows
+    slice_width = img_w // cols
     
     pieces = []
     for r in range(rows):
         for c in range(cols):
-            img_path = f"{folder}piece_{r}_{c}.png"
+            # Calcular las coordenadas del "corte" (slice)
+            y1 = r * slice_height
+            y2 = (r + 1) * slice_height
+            x1 = c * slice_width
+            x2 = (c + 1) * slice_width
+            
+            # Cortar la imagen usando NumPy
+            image_slice = full_image[y1:y2, x1:x2]
+            
+            # Dónde debe encajar esta pieza
             target_x = ox + c * PIECE_SIZE
             target_y = oy + r * PIECE_SIZE
             target_angle = 0 
             initial_angle = random.choice([0, 90, 180, 270])
-            piece = PuzzlePiece(img_path, target_x, target_y, target_angle, initial_angle)
+            
+            # Crear la pieza pasándole el 'slice' de NumPy, no un 'path'
+            piece = PuzzlePiece(image_slice, target_x, target_y, target_angle, initial_angle)
             pieces.append(piece)
-    
-    # Devuelve también la definición para usarla en la puntuación
+            
     return pieces, definition["grid_size"], definition["difficulty"]
 
 
@@ -183,7 +227,7 @@ options = HandLandmarkerOptions(
     num_hands=2
 )
 
-# --- 9. BUCLE PRINCIPAL (MODIFICADO) ---
+# --- 9. BUCLE PRINCIPAL (Sin cambios en la lógica, solo en la carga) ---
 with HandLandmarker.create_from_options(options) as landmarker:
     cap = cv2.VideoCapture(0)
     if not cap.isOpened(): sys.exit(1)
@@ -199,11 +243,18 @@ with HandLandmarker.create_from_options(options) as landmarker:
     if not ret: sys.exit(1)
     h, w, _ = frame.shape
     
-    # --- Cargar el puzzle ALEATORIO (Paso 11) ---
-    GRID_ORIGIN = (w - (PIECE_SIZE * 3), h // 2 - (PIECE_SIZE)) # Centrar cuadrícula 
+    # Centrar la cuadrícula (ej. una cuadrícula de 3x3)
+    max_grid_cols = 3 
+    max_grid_rows = 3
+    grid_w_pixels = max_grid_cols * PIECE_SIZE
+    grid_h_pixels = max_grid_rows * PIECE_SIZE
+    GRID_ORIGIN = (w - grid_w_pixels - 50, (h - grid_h_pixels) // 2)
     
-    # --- Lógica de selección aleatoria ---
     puzzle_names = list(PUZZLE_DEFINITIONS.keys())
+    if not puzzle_names:
+        print("Error: No hay puzzles definidos en PUZZLE_DEFINITIONS.")
+        sys.exit(1)
+        
     loaded_puzzle_name = random.choice(puzzle_names)
     print(f"--- Cargando puzzle aleatorio: {loaded_puzzle_name} ---")
     
@@ -211,13 +262,15 @@ with HandLandmarker.create_from_options(options) as landmarker:
         puzzle_pieces, grid_size, difficulty = load_puzzle(loaded_puzzle_name, GRID_ORIGIN)
     except FileNotFoundError as e:
         print(f"Error: {e}")
-        print(f"Asegúrate de que la carpeta '{loaded_puzzle_name}' y sus piezas existen.")
+        print("Asegúrate de haber creado la carpeta 'images/full_puzzles/' y puesto las imágenes allí.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error inesperado al cargar el puzzle: {e}")
         sys.exit(1)
     
-    # --- Variables de estado del juego (Paso 11) ---
     held_piece = None
     game_won = False
-    start_time = time.time() # <-- INICIAR CRONÓMETRO
+    start_time = time.time()
     elapsed_time = 0
     final_score = 0
 
@@ -253,7 +306,6 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 elif gesture == "HAND":
                     cv2.circle(canvas, (cursor_pos_x, cursor_pos_y), 10, (0, 0, 255), -1)
         
-        # --- LÓGICA DE JUEGO ---
         if not game_won:
             if held_piece is None:
                 if pinch_pos:
@@ -278,7 +330,6 @@ with HandLandmarker.create_from_options(options) as landmarker:
                             held_piece.rotate_piece()
                             rotate_cooldown = COOLDOWN_FRAMES 
 
-        # --- DIBUJADO ---
         draw_grid(canvas, GRID_ORIGIN, grid_size, PIECE_SIZE)
         for piece in puzzle_pieces:
             if piece is not held_piece:
@@ -286,18 +337,15 @@ with HandLandmarker.create_from_options(options) as landmarker:
         if held_piece:
             held_piece.draw(canvas)
 
-        # --- LÓGICA DE VICTORIA Y PUNTUACIÓN (Paso 11) ---
         if not game_won:
             if all(p.is_solved for p in puzzle_pieces):
                 game_won = True
                 end_time = time.time()
                 elapsed_time = end_time - start_time
-                # Puntuación: 10000 * dificultad / segundos
                 final_score = (10000 * difficulty) / elapsed_time 
                 print(f"¡HAS GANADO! Tiempo: {elapsed_time:.2f}s, Puntuación: {final_score:.0f}")
                 
         if game_won:
-            # Mostrar pantalla de victoria
             cv2.putText(canvas, "HAS GANADO", (w//2 - 190, h//2 - 60), 
                         cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 4)
             cv2.putText(canvas, f"Tiempo: {elapsed_time:.2f}s", (w//2 - 150, h//2 + 10), 
@@ -305,12 +353,11 @@ with HandLandmarker.create_from_options(options) as landmarker:
             cv2.putText(canvas, f"Puntuacion: {final_score:.0f}", (w//2 - 160, h//2 + 70), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 2)
         else:
-            # Mostrar tiempo actual
             current_elapsed = time.time() - start_time
             cv2.putText(canvas, f"Tiempo: {current_elapsed:.1f}", (10, h - 20), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
 
-        cv2.imshow("Juego de Puzzle IPM - Paso 11", canvas)
+        cv2.imshow("Juego de Puzzle IPM - Paso 12", canvas)
 
         key = cv2.waitKey(5) & 0xFF
         if key == 27:
