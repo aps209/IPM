@@ -4,6 +4,7 @@ import mediapipe as mp
 import numpy as np
 import time
 import random 
+import pygame 
 
 # --- 1. IMPORTACIONES ---
 BaseOptions = mp.tasks.BaseOptions
@@ -23,8 +24,16 @@ SPAWN_X_LIMIT = 250
 
 # --- CONSTANTES DE AYUDA ---
 HELP_DELAY_SECONDS = 10 
-HELP_SIZE = 300 # Tamaño de la imagen de ayuda aumentado
-HELP_POSITION = (10, 10) # Se recalculará en el bucle principal
+HELP_SIZE = 300 
+HELP_POSITION = (10, 10) 
+
+# --- CONSTANTES DE RECOMPENSA (NUEVO) ---
+FULL_GHOST_DURATION_SECONDS = 5.0 # 5 segundos para la pista del 25%
+
+# --- CONSTANTES DE AUDIO ---
+MENU_MUSIC_PATH = "music/menu.mp3" 
+GAME_MUSIC_PATH = "music/game.mp3" 
+VICTORY_MUSIC_PATH = "music/victory.mp3"
 
 # --- 2. FUNCIONES DE GESTOS Y DISTANCIA ---
 def get_normalized_distance(landmark1, landmark2) -> float:
@@ -32,27 +41,45 @@ def get_normalized_distance(landmark1, landmark2) -> float:
 
 PINCH_THRESHOLD = 0.07 
 def detect_gesture(hand_landmarks_list):
+    # Gestos se definen por las puntas de los dedos
     thumb_tip = hand_landmarks_list[mp_hands.HandLandmark.THUMB_TIP]
     index_tip = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+    middle_tip = hand_landmarks_list[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+    ring_tip = hand_landmarks_list[mp_hands.HandLandmark.RING_FINGER_TIP]
+    pinky_tip = hand_landmarks_list[mp_hands.HandLandmark.PINKY_TIP]
+    
+    # Nudillos (MCP - base de los dedos)
+    index_mcp = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_MCP]
+    middle_mcp = hand_landmarks_list[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
+    ring_mcp = hand_landmarks_list[mp_hands.HandLandmark.RING_FINGER_MCP]
+    pinky_mcp = hand_landmarks_list[mp_hands.HandLandmark.PINKY_MCP] 
+
+    # --- Detección de PELLIZCO ---
     pinch_distance = get_normalized_distance(thumb_tip, index_tip)
     if pinch_distance < PINCH_THRESHOLD:
         pos = ((thumb_tip.x + index_tip.x) / 2, (thumb_tip.y + index_tip.y) / 2)
         return "PINCH", pos
 
-    index_mcp = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_MCP]
-    index_tip = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_TIP]
-    middle_tip = hand_landmarks_list[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
-    ring_tip = hand_landmarks_list[mp_hands.HandLandmark.RING_FINGER_TIP]
-    pinky_tip = hand_landmarks_list[mp_hands.HandLandmark.PINKY_TIP]
-    if index_tip.y < index_mcp.y and (middle_tip.y > index_mcp.y and ring_tip.y > index_mcp.y and pinky_tip.y > index_mcp.y):
+    # --- Detección de PUNTERO ---
+    if index_tip.y < index_mcp.y and (middle_tip.y > middle_mcp.y and ring_tip.y > ring_mcp.y and pinky_tip.y > pinky_mcp.y):
         return "POINT", (index_tip.x, index_tip.y)
+    
+    # --- Detección de PUÑO (FIST) ---
+    if (index_tip.y > index_mcp.y and 
+        middle_tip.y > middle_mcp.y and 
+        ring_tip.y > ring_mcp.y and 
+        pinky_tip.y > pinky_mcp.y):
+        fist_x = (index_mcp.x + middle_mcp.x) / 2
+        fist_y = (index_mcp.y + middle_mcp.y) / 2
+        return "FIST", (fist_x, fist_y)
 
+    # --- Gesto por defecto: MANO ---
     p0, p5, p17 = hand_landmarks_list[0], hand_landmarks_list[5], hand_landmarks_list[17]
     pos = ((p0.x + p5.x + p17.x) / 3, (p0.y + p5.y + p17.y) / 3)
     return "HAND", pos
 
 # --- 3. FUNCIÓN: COMPOSICIÓN ALFA ---
-def overlay_transparent(background, overlay, x, y):
+def overlay_transparent(background, overlay, x, y, opacity=1.0):
     x, y = int(x), int(y)
     h_overlay, w_overlay = overlay.shape[:2]
     h_back, w_back = background.shape[:2]
@@ -65,7 +92,7 @@ def overlay_transparent(background, overlay, x, y):
     roi = background[y1:y2, x1:x2]
     overlay_crop = overlay[y1_overlay:y2_overlay, x1_overlay:x2_overlay]
     
-    alpha = overlay_crop[:, :, 3] / 255.0
+    alpha = (overlay_crop[:, :, 3] / 255.0) * opacity 
     alpha_mask = cv2.merge([alpha, alpha, alpha])
     alpha_mask_inv = 1.0 - alpha_mask
     overlay_bgr = overlay_crop[:, :, :3]
@@ -116,6 +143,12 @@ class PuzzlePiece:
         draw_y = self.y - (new_h // 2)
         overlay_transparent(frame, rotated_img, draw_x, draw_y)
 
+    def draw_ghost(self, frame):
+        draw_x = self.target_x
+        draw_y = self.target_y
+        img_to_draw = cv2.resize(self.original_img, (self.w, self.h))
+        overlay_transparent(frame, img_to_draw, draw_x, draw_y, opacity=0.3)
+
     def update_position(self, pos):
         if self.is_held:
             self.x, self.y = pos[0], pos[1]
@@ -148,17 +181,17 @@ class PuzzlePiece:
 PUZZLE_DEFINITIONS = {
     "gato": {
         "image_file": "images/full_puzzles/pato.jpg", 
-        "grid_size": (3, 2), # Fácil 3 filas x 2 columnas = 6 piezas
+        "grid_size": (3, 2), 
         "difficulty": 2
     },
     "ua": {
         "image_file": "images/full_puzzles/ua.jpg", 
-        "grid_size": (3, 3), # Normal 3 filas x 3 columnas = 9 piezas
+        "grid_size": (3, 3), 
         "difficulty": 3
     },
     "alicante": {
         "image_file": "images/full_puzzles/alicante.png", 
-        "grid_size": (4, 4), # Difícil 4 filas x 4 columnas =16 piezas
+        "grid_size": (4, 4), 
         "difficulty": 4 
     },
     "playa": {
@@ -168,7 +201,7 @@ PUZZLE_DEFINITIONS = {
     },
     "parra": {
         "image_file": "images/full_puzzles/parra.jpg", 
-        "grid_size": (5, 5), # Experto 5 filas x 5 columnas = 25 piezas
+        "grid_size": (5, 5), 
         "difficulty": 5
     }
 }
@@ -214,10 +247,19 @@ def load_puzzle(puzzle_name, grid_origin):
             
     return pieces, definition["grid_size"], definition["difficulty"], full_image
 
-# --- FUNCIÓN NUEVA: MOSTRAR MENÚ (INTERACTIVO CON MANO) ---
+# --- FUNCIÓN DE AUDIO ---
+def play_music(file_path, loops=-1):
+    try:
+        pygame.mixer.music.load(file_path)
+        pygame.mixer.music.play(loops) 
+        print(f"Reproduciendo música: {file_path}")
+    except pygame.error as e:
+        print(f"Error al cargar o reproducir música: {file_path}")
+        print(f"Detalle del error: {e}")
+
+# --- FUNCIÓN DE MENÚ ---
 def show_menu_and_get_selection(landmarker, cap, w, h):
     menu_options_data = [
-        # (Opcion, Descripcion, Puzle/s a cargar, Coordenada Y de inicio del texto)
         ("1", "Facil (3x2): Gato", ["gato"], h//4 + 120),
         ("2", "Normal (3x3): UA", ["ua"], h//4 + 190),
         ("3", "Dificil (4x4): Alicante/Playa", ["alicante", "playa"], h//4 + 260),
@@ -225,21 +267,21 @@ def show_menu_and_get_selection(landmarker, cap, w, h):
     ]
     
     CLICK_WIDTH = 600
-    CLICK_HEIGHT = 50
-    CLICK_X = w//2 - 300 # Mismo X para todos para que estén alineados
+    CLICK_X = w//2 - 300 
 
     selection_areas = []
     for _, _, _, y_text in menu_options_data:
-        y1 = y_text - 40 # 40px por encima del texto
-        y2 = y_text + 15 # 15px por debajo del texto
+        y1 = y_text - 40 
+        y2 = y_text + 15 
         selection_areas.append((CLICK_X, y1, CLICK_X + CLICK_WIDTH, y2))
     
-    # Bucle principal para el menú
+    play_music(MENU_MUSIC_PATH)
+    
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: sys.exit(1)
         
-        menu_canvas = np.full((h, w, 3), (25, 25, 112), dtype="uint8") # Fondo azul marino
+        menu_canvas = np.full((h, w, 3), (25, 25, 112), dtype="uint8") 
         
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
@@ -251,14 +293,12 @@ def show_menu_and_get_selection(landmarker, cap, w, h):
             for hand_landmarks_list in result.hand_landmarks:
                 gesture, pos = detect_gesture(hand_landmarks_list)
                 
-                # Invertir y escalar la posición del cursor
                 cursor_pos_x = int((1.0 - pos[0]) * w) 
                 cursor_pos_y = int(pos[1] * h)
 
                 if gesture == "PINCH":
                     cv2.circle(menu_canvas, (cursor_pos_x, cursor_pos_y), 20, (0, 255, 0), -1)
                     
-                    # Comprobar la colisión del PINCH con las áreas de selección
                     for i, area in enumerate(selection_areas):
                         x1, y1, x2, y2 = area
                         
@@ -266,32 +306,28 @@ def show_menu_and_get_selection(landmarker, cap, w, h):
                             selected_puzzles = menu_options_data[i][2]
                             return random.choice(selected_puzzles)
                             
-                else:
+                else: 
                     cv2.circle(menu_canvas, (cursor_pos_x, cursor_pos_y), 15, (255, 255, 255), -1)
 
-        # 1. Dibujar Título
         cv2.putText(menu_canvas, "SELECCIONA LA DIFICULTAD", (w//2 - 400, h//4), 
                     cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 4)
         cv2.putText(menu_canvas, "-----------------------------", (w//2 - 400, h//4 + 50), 
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
-        # 2. Dibujar Opciones y Resaltar
         for i, (key, desc, _, y_start) in enumerate(menu_options_data):
             x1, y1, x2, y2 = selection_areas[i]
             color = (255, 255, 255)
             
-            # Resaltar el botón si el cursor está sobre él
             if cursor_pos_x is not None and x1 <= cursor_pos_x <= x2 and y1 <= cursor_pos_y <= y2:
-                color = (255, 255, 0) # Amarillo para resaltar
+                color = (255, 255, 0) 
                 cv2.rectangle(menu_canvas, (x1, y1), (x2, y2), (255, 255, 0), cv2.FILLED)
 
             cv2.putText(menu_canvas, f"Opcion {key}: {desc}", (CLICK_X, y_start), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
 
-        cv2.imshow("Juego de Puzzle IPM - Paso 12", menu_canvas)
+        cv2.imshow("Juego de Puzzle IPM", menu_canvas) 
         
-        # Lógica de salida con tecla (opcional)
-        if cv2.waitKey(1) & 0xFF == 27: # ESCAPE
+        if cv2.waitKey(1) & 0xFF == 27: 
             sys.exit()
 
 # --- 8. OPCIONES DE MEDIAPIPE ---
@@ -302,12 +338,13 @@ options = HandLandmarkerOptions(
 )
 
 # --- 9. BUCLE PRINCIPAL ---
+pygame.mixer.init()
+
 with HandLandmarker.create_from_options(options) as landmarker:
     cap = cv2.VideoCapture(0)
     if not cap.isOpened(): 
         sys.exit(1)
 
-    # --- INTENTAR FORZAR RESOLUCIÓN HD (1280x720) ---
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
@@ -315,37 +352,30 @@ with HandLandmarker.create_from_options(options) as landmarker:
     final_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"Resolución de la ventana: {final_w}x{final_h}")
     
-    # ELIMINAMOS VARIABLES DE TIEMPO ACUMULATIVO (frame_ms, timestamp)
-    # y solo mantenemos las variables de control
     rotate_cooldown = 0
     COOLDOWN_FRAMES = 10 
+    fist_cooldown = 0 
+    FIST_COOLDOWN_FRAMES = 15
 
     ret, frame = cap.read()
     if not ret: sys.exit(1)
     h, w, _ = frame.shape
     
-    # -----------------------------------------------------------------
-    # --- LLAMADA AL MENÚ DE SELECCIÓN DE DIFICULTAD (ÚNICA LLAMADA) ---
+    WINDOW_NAME = "Juego de Puzzle IPM"
+    
     loaded_puzzle_name = show_menu_and_get_selection(landmarker, cap, w, h)
-    # -----------------------------------------------------------------
     
-    # --- CÁLCULO DE POSICIONES DESPUÉS DE LA SELECCIÓN DEL MENÚ ---
+    pygame.mixer.music.stop()
+    play_music(GAME_MUSIC_PATH)
     
-    # Centrar la cuadrícula (usando el máximo tamaño 5x5 como referencia para centrar)
     max_grid_cols = 5 
     max_grid_rows = 5
     grid_w_pixels = max_grid_cols * PIECE_SIZE
     grid_h_pixels = max_grid_rows * PIECE_SIZE
-    
-    # X: Centrado horizontal
     grid_x = (w - grid_w_pixels) // 2 
-    # Y: Centrado vertical
     grid_y = (h - grid_h_pixels) // 2 
     GRID_ORIGIN = (grid_x, grid_y)
-
-    # --- DEFINIR POSICIÓN DE AYUDA (Esquina Inferior Derecha) ---
     HELP_POSITION = (w - HELP_SIZE - 10, h - HELP_SIZE - 50)
-    # ---------------------------------------------
     
     print(f"--- Cargando puzzle seleccionado: {loaded_puzzle_name} ---")
     
@@ -359,45 +389,51 @@ with HandLandmarker.create_from_options(options) as landmarker:
         print(f"Error inesperado al cargar el puzzle: {e}")
         sys.exit(1)
     
-    # --- Variables de estado del juego ---
     show_help_image = False
     if original_puzzle_img is not None:
-        # Aquí se usa HELP_SIZE
         help_image_resized = cv2.resize(original_puzzle_img, (HELP_SIZE, HELP_SIZE), interpolation=cv2.INTER_AREA)
+        
+        # --- NUEVO: Crear la imagen fantasma completa del puzzle ---
+        full_ghost_image = cv2.resize(original_puzzle_img, (grid_size[1] * PIECE_SIZE, grid_size[0] * PIECE_SIZE))
+        if full_ghost_image.shape[2] == 3: # Asegurarse de que tenga canal alfa
+            full_ghost_image = cv2.cvtColor(full_ghost_image, cv2.COLOR_BGR2BGRA)
+            
     else:
-        help_image_resized = None 
+        help_image_resized = None
+        full_ghost_image = None
 
     held_piece = None
     game_won = False
     start_time = time.time()
     elapsed_time = 0
     final_score = 0
+    
+    total_pieces = len(puzzle_pieces)
+    # --- RECOMPENSAS (MODIFICADO) ---
+    rewards_claimed = {"25": False, "50": False} # Solo 2 recompensas
+    banked_hints = 0 # Solo para la del 50%
+    active_hint_piece = None 
+    show_full_ghost_timer = 0.0 # Temporizador para la pista del 25%
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
 
-        # FONDO BLANCO
         canvas = np.full((h, w, 3), (255, 255, 255), dtype="uint8") 
 
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        
-        # === SOLUCIÓN FINAL: USAR TIEMPO REAL PARA MEDIA PIPE ===
-        # Garantiza que el timestamp sea siempre mayor al anterior, evitando el ValueError.
         current_timestamp_ms = int(time.time() * 1000)
         result = landmarker.detect_for_video(mp_image, current_timestamp_ms)
-        # =======================================================
         
-        if rotate_cooldown > 0:
-            rotate_cooldown -= 1
+        if rotate_cooldown > 0: rotate_cooldown -= 1
+        if fist_cooldown > 0: fist_cooldown -= 1 
 
-        pinch_pos, point_pos = None, None 
+        pinch_pos, point_pos, fist_detected = None, None, False
 
         if result.hand_landmarks:
             for hand_landmarks_list in result.hand_landmarks:
                 gesture, pos = detect_gesture(hand_landmarks_list)
-                # La posición x debe invertirse para el espejo de la cámara
                 cursor_pos_x = int(pos[0] * w)
                 cursor_pos_y = int(pos[1] * h)
                 cursor_pos_x = w - cursor_pos_x 
@@ -408,10 +444,12 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 elif gesture == "POINT":
                     point_pos = (pos[0], pos[1])
                     cv2.circle(canvas, (cursor_pos_x, cursor_pos_y), 15, (255, 0, 0), -1)
+                elif gesture == "FIST": 
+                    fist_detected = True
+                    cv2.circle(canvas, (cursor_pos_x, cursor_pos_y), 20, (255, 0, 255), -1) 
                 elif gesture == "HAND":
                     cv2.circle(canvas, (cursor_pos_x, cursor_pos_y), 10, (0, 0, 255), -1)
         
-        # --- LÓGICA DE JUEGO Y GESTOS ---
         if not game_won:
             if held_piece is None:
                 if pinch_pos:
@@ -419,16 +457,18 @@ with HandLandmarker.create_from_options(options) as landmarker:
                     for piece in reversed(puzzle_pieces):
                         if piece.check_collision((pinch_pixel_x, pinch_pixel_y)): 
                             if piece.is_solved:
-                                piece.is_solved = False # ¡Desencajar si estaba fija!
-                                print(f"Pieza ({piece.target_x}, {piece.target_y}) desencajada.")
-
+                                piece.is_solved = False 
+                                if piece == active_hint_piece: 
+                                    active_hint_piece = None
                             held_piece = piece
                             held_piece.is_held = True
                             break 
-            else:
+            else: 
                 if not pinch_pos:
                     held_piece.is_held = False
-                    held_piece.snap_to_target()
+                    if held_piece.snap_to_target():
+                        if held_piece == active_hint_piece:
+                            active_hint_piece = None
                     held_piece = None
                 else:
                     pinch_pixel_x, pinch_pixel_y = int((1.0 - pinch_pos[0]) * w), int(pinch_pos[1] * h)
@@ -439,18 +479,57 @@ with HandLandmarker.create_from_options(options) as landmarker:
                         if held_piece.check_collision((point_pixel_x, point_pixel_y)):
                             held_piece.rotate_piece()
                             rotate_cooldown = COOLDOWN_FRAMES 
+            
+            if fist_detected and fist_cooldown == 0 and banked_hints > 0 and active_hint_piece is None:
+                banked_hints -= 1
+                fist_cooldown = FIST_COOLDOWN_FRAMES
+                
+                unsolved_pieces = [p for p in puzzle_pieces if not p.is_solved]
+                if unsolved_pieces:
+                    active_hint_piece = random.choice(unsolved_pieces)
+                    print(f"¡PISTA (50%) ACTIVADA! Mostrando pieza fantasma.")
 
+        # --- DIBUJAR CUADRÍCULA Y PIEZAS ---
         draw_grid(canvas, GRID_ORIGIN, grid_size, PIECE_SIZE)
+        
+        # --- DIBUJAR PISTA 25% (Pista completa) ---
+        if time.time() < show_full_ghost_timer:
+            if full_ghost_image is not None:
+                (ox, oy) = GRID_ORIGIN
+                overlay_transparent(canvas, full_ghost_image, ox, oy, opacity=0.3)
+        
+        # --- DIBUJAR PISTA 50% (Pieza única) ---
+        if active_hint_piece:
+            active_hint_piece.draw_ghost(canvas)
+            
         for piece in puzzle_pieces:
             if piece is not held_piece:
                 piece.draw(canvas)
         if held_piece:
             held_piece.draw(canvas)
 
-        # Lógica de TIEMPO y AYUDA
         current_elapsed = time.time() - start_time 
         
+        # --- LÓGICA DE RECOMPENSAS (MODIFICADA) ---
         if not game_won:
+            solved_count = sum(1 for p in puzzle_pieces if p.is_solved)
+            progress_percent = (solved_count / total_pieces) * 100
+
+            # --- Checkpoint 25% (Pista completa automática) ---
+            if progress_percent >= 25 and not rewards_claimed["25"]:
+                rewards_claimed["25"] = True
+                show_full_ghost_timer = time.time() + FULL_GHOST_DURATION_SECONDS
+                print(f"¡RECOMPENSA 25%! Mostrando pista completa por {FULL_GHOST_DURATION_SECONDS} segundos.")
+            
+            # --- Checkpoint 50% (Pista de pieza) ---
+            if progress_percent >= 50 and not rewards_claimed["50"]:
+                rewards_claimed["50"] = True
+                banked_hints += 1
+                print("¡RECOMPENSA 50%! +1 Pista de Pieza ganada (Usar Puño).")
+                        
+            # (Recompensa 75% eliminada)
+
+            # Ayuda por tiempo (la mantenemos)
             if current_elapsed >= HELP_DELAY_SECONDS and not show_help_image:
                 show_help_image = True
                 print("¡AYUDA ACTIVADA! Se muestra la imagen completa del puzzle.")
@@ -461,13 +540,29 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 elapsed_time = end_time - start_time
                 final_score = (10000 * difficulty) / elapsed_time 
                 print(f"¡HAS GANADO! Tiempo: {elapsed_time:.2f}s, Puntuación: {final_score:.0f}")
+                pygame.mixer.music.stop()
+                play_music(VICTORY_MUSIC_PATH,1)
                 
-        # DIBUJAR LA AYUDA (si está activa)
         if show_help_image and help_image_resized is not None:
             (hx, hy) = HELP_POSITION
             overlay_transparent(canvas, help_image_resized, hx, hy)
 
-        # MOSTRAR PUNTUACIÓN Y TIEMPO
+        # --- DIBUJAR BARRA DE PROGRESO (MODIFICADA) ---
+        bar_x, bar_y, bar_w, bar_h = w - 320, 10, 300, 30
+        cv2.rectangle(canvas, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (0, 0, 0), 2)
+        fill_w = int((progress_percent / 100) * bar_w)
+        cv2.rectangle(canvas, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), (0, 255, 0), -1)
+        
+        # Check marks (solo 25 y 50)
+        for perc in [25, 50]:
+            cx = bar_x + int((perc / 100) * bar_w)
+            color = (0, 255, 0) if rewards_claimed[str(perc)] else (0, 0, 0)
+            cv2.line(canvas, (cx, bar_y), (cx, bar_y + bar_h), color, 2)
+        
+        cv2.putText(canvas, f"Pistas: {banked_hints}", (bar_x, bar_y + 60), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+
+        # --- MOSTRAR PANTALLA DE VICTORIA O TIEMPO ---
         if game_won:
             cv2.putText(canvas, "HAS GANADO", (w//2 - 190, h//2 - 60), 
                         cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 4)
@@ -479,11 +574,12 @@ with HandLandmarker.create_from_options(options) as landmarker:
             cv2.putText(canvas, f"Tiempo: {current_elapsed:.1f}", (10, h - 20), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
 
-        cv2.imshow("Juego de Puzzle IPM - Paso 12", canvas)
+        cv2.imshow(WINDOW_NAME, canvas)
 
         key = cv2.waitKey(5) & 0xFF
         if key == 27:
             break
-        
+            
+    pygame.mixer.music.stop()
     cap.release()
     cv2.destroyAllWindows()

@@ -37,3 +37,4 @@ sounddevice==0.5.2
 tqdm==4.67.1
 urllib3==2.5.0
 wheel==0.45.1
+pygame
