@@ -27,8 +27,8 @@ HELP_DELAY_SECONDS = 90
 HELP_SIZE = 300 
 HELP_POSITION = (10, 10) 
 
-# --- CONSTANTES DE RECOMPENSA (NUEVO) ---
-FULL_GHOST_DURATION_SECONDS = 5.0 # 5 segundos para la pista del 25%
+# --- CONSTANTES DE RECOMPENSA ---
+FULL_GHOST_DURATION_SECONDS = 5.0 
 
 # --- CONSTANTES DE AUDIO ---
 MENU_MUSIC_PATH = "music/menu.mp3" 
@@ -41,30 +41,25 @@ def get_normalized_distance(landmark1, landmark2) -> float:
 
 PINCH_THRESHOLD = 0.07 
 def detect_gesture(hand_landmarks_list):
-    # Gestos se definen por las puntas de los dedos
     thumb_tip = hand_landmarks_list[mp_hands.HandLandmark.THUMB_TIP]
     index_tip = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_TIP]
     middle_tip = hand_landmarks_list[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
     ring_tip = hand_landmarks_list[mp_hands.HandLandmark.RING_FINGER_TIP]
     pinky_tip = hand_landmarks_list[mp_hands.HandLandmark.PINKY_TIP]
     
-    # Nudillos (MCP - base de los dedos)
     index_mcp = hand_landmarks_list[mp_hands.HandLandmark.INDEX_FINGER_MCP]
     middle_mcp = hand_landmarks_list[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
     ring_mcp = hand_landmarks_list[mp_hands.HandLandmark.RING_FINGER_MCP]
     pinky_mcp = hand_landmarks_list[mp_hands.HandLandmark.PINKY_MCP] 
 
-    # --- Detección de PELLIZCO ---
     pinch_distance = get_normalized_distance(thumb_tip, index_tip)
     if pinch_distance < PINCH_THRESHOLD:
         pos = ((thumb_tip.x + index_tip.x) / 2, (thumb_tip.y + index_tip.y) / 2)
         return "PINCH", pos
 
-    # --- Detección de PUNTERO ---
     if index_tip.y < index_mcp.y and (middle_tip.y > middle_mcp.y and ring_tip.y > ring_mcp.y and pinky_tip.y > pinky_mcp.y):
         return "POINT", (index_tip.x, index_tip.y)
     
-    # --- Detección de PUÑO (FIST) ---
     if (index_tip.y > index_mcp.y and 
         middle_tip.y > middle_mcp.y and 
         ring_tip.y > ring_mcp.y and 
@@ -73,7 +68,6 @@ def detect_gesture(hand_landmarks_list):
         fist_y = (index_mcp.y + middle_mcp.y) / 2
         return "FIST", (fist_x, fist_y)
 
-    # --- Gesto por defecto: MANO ---
     p0, p5, p17 = hand_landmarks_list[0], hand_landmarks_list[5], hand_landmarks_list[17]
     pos = ((p0.x + p5.x + p17.x) / 3, (p0.y + p5.y + p17.y) / 3)
     return "HAND", pos
@@ -393,9 +387,8 @@ with HandLandmarker.create_from_options(options) as landmarker:
     if original_puzzle_img is not None:
         help_image_resized = cv2.resize(original_puzzle_img, (HELP_SIZE, HELP_SIZE), interpolation=cv2.INTER_AREA)
         
-        # --- NUEVO: Crear la imagen fantasma completa del puzzle ---
         full_ghost_image = cv2.resize(original_puzzle_img, (grid_size[1] * PIECE_SIZE, grid_size[0] * PIECE_SIZE))
-        if full_ghost_image.shape[2] == 3: # Asegurarse de que tenga canal alfa
+        if full_ghost_image.shape[2] == 3: 
             full_ghost_image = cv2.cvtColor(full_ghost_image, cv2.COLOR_BGR2BGRA)
             
     else:
@@ -409,11 +402,10 @@ with HandLandmarker.create_from_options(options) as landmarker:
     final_score = 0
     
     total_pieces = len(puzzle_pieces)
-    # --- RECOMPENSAS (MODIFICADO) ---
-    rewards_claimed = {"25": False, "50": False} # Solo 2 recompensas
-    banked_hints = 0 # Solo para la del 50%
+    rewards_claimed = {"25": False, "50": False} 
+    banked_hints = 0 
     active_hint_piece = None 
-    show_full_ghost_timer = 0.0 # Temporizador para la pista del 25%
+    show_full_ghost_timer = 0.0 
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -487,18 +479,15 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 unsolved_pieces = [p for p in puzzle_pieces if not p.is_solved]
                 if unsolved_pieces:
                     active_hint_piece = random.choice(unsolved_pieces)
-                    print(f"¡PISTA ACTIVADA! Mostrando pieza fantasma.")
+                    print(f"¡PISTA (50%) ACTIVADA! Mostrando pieza fantasma.")
 
-        # --- DIBUJAR CUADRÍCULA Y PIEZAS ---
         draw_grid(canvas, GRID_ORIGIN, grid_size, PIECE_SIZE)
         
-        # --- DIBUJAR PISTA 25% (Pista completa) ---
         if time.time() < show_full_ghost_timer:
             if full_ghost_image is not None:
                 (ox, oy) = GRID_ORIGIN
                 overlay_transparent(canvas, full_ghost_image, ox, oy, opacity=0.3)
         
-        # --- DIBUJAR PISTA 50% (Pieza única) ---
         if active_hint_piece:
             active_hint_piece.draw_ghost(canvas)
             
@@ -510,26 +499,20 @@ with HandLandmarker.create_from_options(options) as landmarker:
 
         current_elapsed = time.time() - start_time 
         
-        # --- LÓGICA DE RECOMPENSAS (MODIFICADA) ---
         if not game_won:
             solved_count = sum(1 for p in puzzle_pieces if p.is_solved)
             progress_percent = (solved_count / total_pieces) * 100
 
-            # --- Checkpoint 25% (Pista completa automática) ---
             if progress_percent >= 25 and not rewards_claimed["25"]:
                 rewards_claimed["25"] = True
                 show_full_ghost_timer = time.time() + FULL_GHOST_DURATION_SECONDS
                 print(f"¡RECOMPENSA 25%! Mostrando pista completa por {FULL_GHOST_DURATION_SECONDS} segundos.")
             
-            # --- Checkpoint 50% (Pista de pieza) ---
             if progress_percent >= 50 and not rewards_claimed["50"]:
                 rewards_claimed["50"] = True
                 banked_hints += 1
                 print("¡RECOMPENSA 50%! +1 Pista de Pieza ganada (Usar Puño).")
                         
-            # (Recompensa 75% eliminada)
-
-            # Ayuda por tiempo (la mantenemos)
             if current_elapsed >= HELP_DELAY_SECONDS and not show_help_image:
                 show_help_image = True
                 print("¡AYUDA ACTIVADA! Se muestra la imagen completa del puzzle.")
@@ -541,38 +524,84 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 final_score = (10000 * difficulty) / elapsed_time 
                 print(f"¡HAS GANADO! Tiempo: {elapsed_time:.2f}s, Puntuación: {final_score:.0f}")
                 pygame.mixer.music.stop()
-                play_music(VICTORY_MUSIC_PATH,1)
+                play_music(VICTORY_MUSIC_PATH)
                 
         if show_help_image and help_image_resized is not None:
             (hx, hy) = HELP_POSITION
             overlay_transparent(canvas, help_image_resized, hx, hy)
 
-        # --- DIBUJAR BARRA DE PROGRESO (MODIFICADA) ---
-        bar_x, bar_y, bar_w, bar_h = w - 320, 10, 300, 30
-        cv2.rectangle(canvas, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (0, 0, 0), 2)
-        fill_w = int((progress_percent / 100) * bar_w)
-        cv2.rectangle(canvas, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), (0, 255, 0), -1)
+        # --- BARRA DE PROGRESO Y LEYENDA ---
+        bar_x, bar_y = w - 320, 10
+        bar_w, bar_h = 300, 40
         
-        # Check marks (solo 25 y 50)
+        # 1. Fondo y Barra
+        bar_bg_color = (220, 220, 220, 150) 
+        overlay_transparent(canvas, np.full((bar_h, bar_w, 4), bar_bg_color, dtype=np.uint8), bar_x, bar_y)
+        
+        # 2. Relleno Degradado
+        progress_width = int((progress_percent / 100) * bar_w)
+        if progress_width > 0:
+            for i in range(progress_width):
+                ratio = i / bar_w
+                b = int(255 * (1 - ratio))
+                g = int(255 * ratio)
+                r = 0 
+                cv2.line(canvas, (bar_x + i, bar_y), (bar_x + i, bar_y + bar_h), (b, g, r), 1)
+
+        # 3. Borde
+        cv2.rectangle(canvas, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (50, 50, 50), 2, cv2.LINE_AA)
+        
+        # 4. Check marks
         for perc in [25, 50]:
             cx = bar_x + int((perc / 100) * bar_w)
-            color = (0, 255, 0) if rewards_claimed[str(perc)] else (0, 0, 0)
-            cv2.line(canvas, (cx, bar_y), (cx, bar_y + bar_h), color, 2)
+            cy = bar_y + bar_h // 2
+            inner_color = (0, 255, 0) if rewards_claimed[str(perc)] else (150, 150, 150)
+            cv2.circle(canvas, (cx, cy), 10, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(canvas, (cx, cy), 7, inner_color, -1, cv2.LINE_AA)
+            cv2.circle(canvas, (cx, cy), 10, (50, 50, 50), 1, cv2.LINE_AA)
         
-        cv2.putText(canvas, f"Pistas: {banked_hints}", (bar_x, bar_y + 60), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+        # 5. Contador de Pistas
+        cv2.putText(canvas, f"Pistas: {banked_hints}", (bar_x, bar_y + bar_h + 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (50, 50, 50), 2, cv2.LINE_AA)
+        
+        # 6. LEYENDA DE GESTOS (NUEVO)
+        legend_x, legend_y = bar_x, bar_y + bar_h + 40 # Debajo del contador de pistas
+        legend_w, legend_h = bar_w, 100
+        
+        # Fondo semitransparente
+        legend_bg = np.full((legend_h, legend_w, 4), (240, 240, 240, 180), dtype=np.uint8)
+        overlay_transparent(canvas, legend_bg, legend_x, legend_y)
+        
+        # Iconos y Texto
+        # Fila 1: Mover (Círculo Verde)
+        cv2.circle(canvas, (legend_x + 20, legend_y + 20), 8, (0, 200, 0), -1, cv2.LINE_AA)
+        cv2.putText(canvas, "MOVER (Pellizco)", (legend_x + 40, legend_y + 25), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 50, 50), 1, cv2.LINE_AA)
+        
+        # Fila 2: Rotar (Círculo Rojo)
+        cv2.circle(canvas, (legend_x + 20, legend_y + 50), 8, (0, 0, 255), -1, cv2.LINE_AA)
+        cv2.putText(canvas, "ROTAR (Apuntar)", (legend_x + 40, legend_y + 55), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 50, 50), 1, cv2.LINE_AA)
+                    
+        # Fila 3: Pista (Círculo Magenta)
+        cv2.circle(canvas, (legend_x + 20, legend_y + 80), 8, (255, 0, 255), -1, cv2.LINE_AA)
+        cv2.putText(canvas, "PISTA (Puno)", (legend_x + 40, legend_y + 85), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 50, 50), 1, cv2.LINE_AA)
 
         # --- MOSTRAR PANTALLA DE VICTORIA O TIEMPO ---
         if game_won:
-            cv2.putText(canvas, "HAS GANADO", (w//2 - 190, h//2 - 60), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 4)
-            cv2.putText(canvas, f"Tiempo: {elapsed_time:.2f}s", (w//2 - 150, h//2 + 10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-            cv2.putText(canvas, f"Puntuacion: {final_score:.0f}", (w//2 - 160, h//2 + 70), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 2)
+            overlay_transparent(canvas, np.full((200, 600, 4), (255, 255, 255, 200), dtype=np.uint8), w//2 - 300, h//2 - 100)
+            
+            cv2.putText(canvas, "HAS GANADO", (w//2 - 190, h//2 - 30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 150, 0), 4, cv2.LINE_AA)
+            cv2.putText(canvas, f"Tiempo: {elapsed_time:.2f}s", (w//2 - 150, h//2 + 40), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (50, 50, 50), 2, cv2.LINE_AA)
+            cv2.putText(canvas, f"Puntuacion: {final_score:.0f}", (w//2 - 160, h//2 + 90), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3, cv2.LINE_AA)
         else:
-            cv2.putText(canvas, f"Tiempo: {current_elapsed:.1f}", (10, h - 20), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+            time_str = f"Tiempo: {current_elapsed:.1f}"
+            cv2.putText(canvas, time_str, (12, h - 18), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 5, cv2.LINE_AA)
+            cv2.putText(canvas, time_str, (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (50, 50, 50), 2, cv2.LINE_AA)
 
         cv2.imshow(WINDOW_NAME, canvas)
 
