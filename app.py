@@ -23,7 +23,7 @@ GRID_COLOR = (100, 100, 100)
 SPAWN_X_LIMIT = 250 
 
 # --- CONSTANTES DE AYUDA ---
-HELP_DELAY_SECONDS = 10 
+HELP_DELAY_SECONDS = 90 
 HELP_SIZE = 300 
 HELP_POSITION = (10, 10) 
 
@@ -487,7 +487,7 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 unsolved_pieces = [p for p in puzzle_pieces if not p.is_solved]
                 if unsolved_pieces:
                     active_hint_piece = random.choice(unsolved_pieces)
-                    print(f"¡PISTA (50%) ACTIVADA! Mostrando pieza fantasma.")
+                    print(f"¡PISTA ACTIVADA! Mostrando pieza fantasma.")
 
         # --- DIBUJAR CUADRÍCULA Y PIEZAS ---
         draw_grid(canvas, GRID_ORIGIN, grid_size, PIECE_SIZE)
