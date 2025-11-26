@@ -52,15 +52,10 @@ Para descargar los pesos de otros modelos como _Hand Landmarker_, _Face Landmark
 python app.py
 ```
 
+conda create -n IPM python=3.12
+
 Extra: tienes que abrir conda y hacer una maquina virtual con python 3.12.
 
 ```bash
-conda create -n IPM python=3.12
-conda activate IPM
-mkdir IPM
-cd IPM
-git clone https://github.com/aps209/IPM
-python download_models.py
-pip install -r requirements.txt
-python app.py
+
 ```
